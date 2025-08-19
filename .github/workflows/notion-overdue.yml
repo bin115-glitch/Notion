@@ -2,26 +2,34 @@ name: Notion Overdue Mail
 
 on:
   schedule:
-    - cron: '*/5 * * * *'   # chạy mỗi 5 phút (UTC)
-  workflow_dispatch: {}      # cho phép bấm Run workflow thủ công
+    # 09:00 sáng VN (UTC+7) = 02:00 UTC, chạy vào Thứ 3 (2) & Thứ 5 (5)
+    - cron: "0 2 * * 2,5"
+  workflow_dispatch: {}   # Cho phép bấm Run workflow để test
 
 jobs:
   run-script:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: '3.10' }
-      - name: Install deps
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install python-dotenv
-      - name: Run script
+
+      - name: Run mailer
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           DATABASE_ID:  ${{ secrets.DATABASE_ID }}
           SMTP_USER:    ${{ secrets.SMTP_USER }}
-          SMTP_PASS:    ${{ secrets.SMTP_PASS }}
-          MAIL_TO:      ${{ secrets.MAIL_TO }}
+          SMTP_PASS:    ${{ secrets.SMTP_PASS }}     # Gmail App Password 16 ký tự
+          MAIL_TO:      ${{ secrets.MAIL_TO }}       # a@gmail.com,b@corp.com
         run: python main.py
