@@ -1,7 +1,7 @@
 name: Notion Overdue Mail
 on:
   schedule:
-    - cron: "0 2 * * 2,5"   # 02:00 UTC = 09:00 VN, Tue & Thu
+    - cron: "0 2 * * 2,4"   # 02:00 UTC = 09:00 VN, Thứ Ba & Thứ Năm
   workflow_dispatch: {}
 jobs:
   run-script:
