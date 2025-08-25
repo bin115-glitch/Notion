@@ -61,4 +61,4 @@ jobs:
           MAIL_TO:   ${{ secrets.MAIL_TO }}
           NOTION_CONFIG: notion_token.json
         run: |
-          python notion_overdue_mailer.py
+          python main.py
