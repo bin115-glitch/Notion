@@ -2,12 +2,14 @@ name: Notion Overdue Report
 
 on:
   schedule:
-    - cron: "0 2 * * 2,4"   # 09:00 ICT thứ 3 & 5
-  workflow_dispatch:
+    # Chạy 09:00 ICT (UTC+7) vào Thứ 3 & Thứ 5  -> 02:00 UTC
+    - cron: "0 2 * * 2,4"
+  workflow_dispatch: {}   # Bắt buộc để có nút “Run workflow”
 
 jobs:
   run-notion-script:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -20,23 +22,51 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; else pip install requests; fi
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install requests python-dotenv
+          fi
 
-      # chỉ dùng secret nếu BẠN THỰC SỰ đặt NOTION_CONFIG; nếu không, giữ file trong repo
-      - name: Write notion_token.json from secret (optional)
+      # Nếu có secret NOTION_CONFIG -> ghi đè notion_token.json từ secret
+      # Nếu không có -> dùng file notion_token.json có sẵn trong repo
+      - name: Prepare notion_token.json (use secret if provided)
         shell: bash
         env:
           CFG: ${{ secrets.NOTION_CONFIG }}
         run: |
           if [ -n "$CFG" ]; then
-            cat > notion_token.json <<'JSON'
-$CFG
-JSON
-            echo "Wrote notion_token.json from secret"
+            printf '%s' "$CFG" > notion_token.json
+            echo "Wrote notion_token.json from secret ($(wc -c < notion_token.json) bytes)"
           else
             test -f notion_token.json || { echo "❌ missing notion_token.json"; exit 1; }
-            echo "Using notion_token.json from repo"
+            echo "Using notion_token.json from repo ($(wc -c < notion_token.json) bytes)"
           fi
 
+      - name: Validate config JSON
+        run: |
+          python - <<'PY'
+          import json, sys, pathlib
+          p = pathlib.Path("notion_token.json")
+          try:
+              cfg = json.loads(p.read_text(encoding="utf-8"))
+          except Exception as e:
+              print("❌ JSON lỗi:", e); sys.exit(1)
+          toks = cfg.get("notion_tokens", [])
+          print(f"✅ Config OK. Tokens: {len(toks)}")
+          for i, t in enumerate(toks, 1):
+              print(f"  - Token #{i}: {len(t.get('databases', []))} DB")
+          print("SMTP in JSON:", "smtp" in cfg, "| smtp_env:", cfg.get("smtp_env", {}))
+          PY
+
       - name: Run notifier
-        run: python main.py   # đổi tên nếu script của bạn khác
+        env:
+          # Nếu notion_token.json dùng token_env/smtp_env thì map sang secrets ở đây
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          SMTP_HOST:    ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:    ${{ secrets.SMTP_PORT }}
+          SMTP_USER:    ${{ secrets.SMTP_USER }}
+          SMTP_PASS:    ${{ secrets.SMTP_PASS }}
+          NOTION_CONFIG: notion_token.json
+        run: |
+          python main.py   # đổi lại nếu script của bạn có tên khác
