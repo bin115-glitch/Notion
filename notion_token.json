@@ -17,5 +17,14 @@
         }
       ]
     }
-  ]
+  ],
+
+  "smtp_env": {
+    "host": "SMTP_HOST",
+    "port": "SMTP_PORT",
+    "user": "SMTP_USER",
+    "pass": "SMTP_PASS"
+  }
 }
+
+
