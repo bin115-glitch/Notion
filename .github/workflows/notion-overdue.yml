@@ -1,31 +1,42 @@
 name: Notion Overdue Report
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: '0 1 * * 2,4'
+    - cron: "0 2 * * 2,4"   # 09:00 ICT thứ 3 & 5
+  workflow_dispatch:
 
 jobs:
   run-notion-script:
     runs-on: ubuntu-latest
-    env:
-      SMTP_HOST: ${{ secrets.SMTP_HOST }}
-      SMTP_PORT: ${{ secrets.SMTP_PORT }}
-      SMTP_USER: ${{ secrets.SMTP_USER }}
-      SMTP_PASS: ${{ secrets.SMTP_PASS }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v4
-        with: { python-version: '3.x' }
+        with:
+          python-version: "3.11"
+
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; else pip install requests python-dotenv; fi
-      - name: Write notion_token.json
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; else pip install requests; fi
+
+      # chỉ dùng secret nếu BẠN THỰC SỰ đặt NOTION_CONFIG; nếu không, giữ file trong repo
+      - name: Write notion_token.json from secret (optional)
+        shell: bash
+        env:
+          CFG: ${{ secrets.NOTION_CONFIG }}
         run: |
-          if [ -z "${{ secrets.NOTION_TOKEN_JSON }}" ]; then echo "NOTION_TOKEN_JSON empty" >&2; exit 1; fi
-          printf '%s' "${{ secrets.NOTION_TOKEN_JSON }}" > notion_token.json
-          chmod 600 notion_token.json
+          if [ -n "$CFG" ]; then
+            cat > notion_token.json <<'JSON'
+$CFG
+JSON
+            echo "Wrote notion_token.json from secret"
+          else
+            test -f notion_token.json || { echo "❌ missing notion_token.json"; exit 1; }
+            echo "Using notion_token.json from repo"
+          fi
+
       - name: Run notifier
-        run: python main.py
+        run: python main.py   # đổi tên nếu script của bạn khác
