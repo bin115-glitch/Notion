@@ -2,14 +2,28 @@ name: Notion Overdue Report
 
 on:
   schedule:
+<<<<<<< HEAD
     # 09:00 ICT (UTC+7) vào Thứ 3 & Thứ 5  → 02:00 UTC
     - cron: "0 2 * * 2,4"
+=======
+    # Chạy lúc 01:00 UTC thứ 3 và thứ 5 (chỉnh giờ nếu cần theo timezone của bạn)
+    - cron: '0 1 * * 2,4'
+>>>>>>> 2237277 (Add GitHub Actions workflow and Notion notifier updates)
   workflow_dispatch:
 
 jobs:
   run-notion-script:
     runs-on: ubuntu-latest
+<<<<<<< HEAD
 
+=======
+    env:
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASS: ${{ secrets.SMTP_PASS }}
+      MAIL_TO: ${{ secrets.MAIL_TO }}
+>>>>>>> 2237277 (Add GitHub Actions workflow and Notion notifier updates)
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -17,11 +31,16 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
+<<<<<<< HEAD
           python-version: "3.11"
+=======
+          python-version: '3.x'
+>>>>>>> 2237277 (Add GitHub Actions workflow and Notion notifier updates)
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+<<<<<<< HEAD
           pip install requests
 
       # Ghi file cấu hình JSON từ secret NOTION_CONFIG
@@ -62,3 +81,15 @@ jobs:
           NOTION_CONFIG: notion_token.json
         run: |
           python main.py
+=======
+          pip install requests python-dotenv
+
+      - name: Write notion_token.json from secret
+        # Secret NOTION_TOKEN_JSON should contain the full JSON content of notion_token.json
+        run: |
+          mkdir -p notion
+          printf '%s' "${{ secrets.NOTION_TOKEN_JSON }}" > notion/notion_token.json
+
+      - name: Run notifier script
+        run: python notion/main.py
+>>>>>>> 2237277 (Add GitHub Actions workflow and Notion notifier updates)

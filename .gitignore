@@ -1,0 +1,5 @@
+```.env
+notion_token.json
+__pycache__/
+*.pyc
+```.env
