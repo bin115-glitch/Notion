@@ -17,8 +17,7 @@ from typing import Optional, Tuple, Dict, Any, List
 from datetime import datetime, timezone
 import requests
 from email.mime.multipart import MIMEMultipart
-from email.mime_text import MIMEText
-
+from email.mime.text import MIMEText 
 CONFIG_PATH = os.getenv("NOTION_CONFIG", "notion_token.json")
 DEFAULT_STATUS_EQUALS = "Đang thực hiện"
 
