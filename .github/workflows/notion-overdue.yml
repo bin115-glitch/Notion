@@ -2,19 +2,14 @@ name: Notion Overdue Report
 
 on:
   schedule:
-    # Chạy lúc 01:00 UTC thứ 3 và thứ 5 (chỉnh giờ nếu cần theo timezone của bạn)
-    - cron: '0 1 * * 2,4'
+    # 09:00 ICT (UTC+7) vào Thứ 3 & Thứ 5  → 02:00 UTC
+    - cron: "0 2 * * 2,4"
   workflow_dispatch:
 
 jobs:
   run-notion-script:
     runs-on: ubuntu-latest
-    env:
-      SMTP_HOST: ${{ secrets.SMTP_HOST }}
-      SMTP_PORT: ${{ secrets.SMTP_PORT }}
-      SMTP_USER: ${{ secrets.SMTP_USER }}
-      SMTP_PASS: ${{ secrets.SMTP_PASS }}
-      MAIL_TO: ${{ secrets.MAIL_TO }}
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -22,18 +17,48 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.x'
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests python-dotenv
+          pip install requests
 
+      # Ghi file cấu hình JSON từ secret NOTION_CONFIG
       - name: Write notion_token.json from secret
-        # Secret NOTION_TOKEN_JSON should contain the full JSON content of notion_token.json
+        shell: bash
         run: |
-          mkdir -p notion
-          printf '%s' "${{ secrets.NOTION_TOKEN_JSON }}" > notion/notion_token.json
+          mkdir -p $GITHUB_WORKSPACE
+          cat <<'JSON' > notion_token.json
+          ${{ secrets.NOTION_CONFIG }}
+          JSON
+          echo "Wrote notion_token.json ($(wc -c < notion_token.json) bytes)"
 
-      - name: Run notifier script
-        run: python notion/main.py
+      # (Tuỳ chọn) Kiểm tra JSON & in summary để debug nhanh
+      - name: Validate config
+        run: |
+          python - <<'PY'
+          import json, sys, pathlib
+          p = pathlib.Path("notion_token.json")
+          try:
+            cfg = json.loads(p.read_text(encoding="utf-8"))
+          except Exception as e:
+            print("❌ JSON lỗi:", e); sys.exit(1)
+          tokens = cfg.get("notion_tokens", [])
+          print(f"✅ Config OK. Tokens: {len(tokens)}. SMTP set: {'smtp' in cfg}")
+          for i, t in enumerate(tokens, 1):
+            print(f"  - Token #{i}: {len(t.get('databases', []))} DB")
+          PY
+
+      # CHỈNH LẠI tên file script nếu bạn đang dùng file khác
+      - name: Run Notion mailer
+        env:
+          # các biến này KHÔNG bắt buộc nếu bạn đã để trong NOTION_CONFIG
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          MAIL_TO:   ${{ secrets.MAIL_TO }}
+          NOTION_CONFIG: notion_token.json
+        run: |
+          python notion_overdue_mailer.py
