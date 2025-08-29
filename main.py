@@ -21,7 +21,7 @@ from email.mime.text import MIMEText
 CONFIG_PATH = os.getenv("NOTION_CONFIG", "notion_token.json")
 DEFAULT_STATUS_EQUALS = "Đang thực hiện"
 
-TITLE_CANDS    = ["Nội dung công việc"]
+TITLE_CANDS    = ["Nội dung công việc", "Mục tiêu, hiệu quả dự án","Chi tiết công việc"]
 PIC_CANDS      = ["PIC", "Người tham gia", "Owner", "Assignee"]
 START_CANDS    = ["Ngày bắt đầu", "Start Date", "Start date"]
 DEADLINE_CANDS = ["Deadline dự kiến", "Deadline", "Due date", "Due", "Ngày đến hạn"]
