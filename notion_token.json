@@ -4,26 +4,9 @@
       "token": "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",
       "databases": [
         {
-          "id": "2565be1a570180b7be9dd9f77b7ac927",
-          "recipients": ["khuattiendung250@gmail.com"]
-        },
-        {
           "id": "2535be1a57018100876fee69216871c6",
-          "recipients": ["khuattiendung250@gmail.com"]
+          "recipients": ["khuattiendung250@gmail.com", "hailn4@vienthongtin.com"]
         },
-         {
-          "id": "2555be1a570180b5859bd2c8e4fcf937",
-          "recipients": ["khuatiendung250@gmail.com"]
-        },
-        {
-          "id": "25a5be1a570180b3be1bd18e703760c3",
-          "recipients": ["iricabutler@gmail.com"]
-        },
-        
-         {
-          "id": "25a5be1a570180eab7f6c9a361273975",
-          "recipients": ["khuattiendung250@gmail.com"]
-        }
       ]
     }
   ],
