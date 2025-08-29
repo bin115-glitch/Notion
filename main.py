@@ -182,9 +182,16 @@ def _any_date(props: Dict[str,Any], names: List[str]) -> str:
     return ""
 
 def _any_title(props: Dict[str,Any]) -> str:
+    # Ưu tiên cột tên rõ ràng "Nội dung công việc"
+    if "Nội dung công việc" in props and props["Nội dung công việc"]["type"] == "title":
+        return "".join(x.get("plain_text", "") for x in props["Nội dung công việc"].get("title", []))
+
+    # Nếu không có thì fallback sang bất kỳ cột title nào khác
     for k, v in props.items():
         if v.get("type") == "title":
             return "".join(x.get("plain_text", "") for x in v.get("title", []))
+
+    # Thử tìm theo danh sách từ khóa ứng viên
     for k in TITLE_CANDS:
         t = _get_text(props, k)
         if t:
