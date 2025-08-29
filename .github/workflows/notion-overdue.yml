@@ -2,7 +2,7 @@ name: Notion Overdue Report
 
 on:
   schedule:
-    - cron: "0 2 * * 1-5"   # 2:00 UTC = 9:00 VN, từ Thứ 2 (1) đến Thứ 6 (5)
+    - cron: "0 1 * * 1-5"   # 01:00 UTC = 08:00 VN, chạy Thứ 2–6
   workflow_dispatch: {}
 
 jobs:
