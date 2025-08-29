@@ -27,6 +27,7 @@ START_CANDS    = ["Ngày bắt đầu", "Start Date", "Start date"]
 DEADLINE_CANDS = ["Deadline dự kiến", "Deadline", "Due date", "Due", "Ngày đến hạn"]
 STATUS_CANDS   = ["Tình trạng công việc trong tuần", "Tình trạng", "Status"]
 
+
 def _headers(token: str) -> Dict[str,str]:
     return {
         "Authorization": f"Bearer {token}",
@@ -182,16 +183,9 @@ def _any_date(props: Dict[str,Any], names: List[str]) -> str:
     return ""
 
 def _any_title(props: Dict[str,Any]) -> str:
-    # Ưu tiên cột tên rõ ràng "Nội dung công việc"
-    if "Nội dung công việc" in props and props["Nội dung công việc"]["type"] == "title":
-        return "".join(x.get("plain_text", "") for x in props["Nội dung công việc"].get("title", []))
-
-    # Nếu không có thì fallback sang bất kỳ cột title nào khác
     for k, v in props.items():
         if v.get("type") == "title":
             return "".join(x.get("plain_text", "") for x in v.get("title", []))
-
-    # Thử tìm theo danh sách từ khóa ứng viên
     for k in TITLE_CANDS:
         t = _get_text(props, k)
         if t:
@@ -260,6 +254,48 @@ def query_overdue(token: str, database_id: str, schema: Optional[Dict[str,str]] 
                 kept.append(it)
         rows = kept
     return rows
+
+# Thêm: truy vấn theo trạng thái (không lọc theo deadline)
+def query_status(token: str, database_id: str, status_equals: Optional[str] = DEFAULT_STATUS_EQUALS) -> List[Dict[str,Any]]:
+	props = _get_db_props(token, database_id)
+	# tìm property status giống query_overdue
+	status_prop = None
+	for nm in STATUS_CANDS:
+		status_prop = _find_prop_by_name(props, nm, want_types=("status","select"))
+		if status_prop:
+			break
+	if not status_prop:
+		for name, meta in props.items():
+			if meta.get("type") in ("status","select"):
+				status_prop = {"name": name, "id": meta["id"], "type": meta["type"]}
+				break
+	url = f"https://api.notion.com/v1/databases/{database_id}/query"
+	payload = {"page_size": 100}
+	if status_equals and status_prop:
+		operator = status_prop["type"]
+		payload["filter"] = {"property": status_prop["id"], operator: {"equals": status_equals}}
+	rows: List[Dict[str,Any]] = []
+	cursor = None
+	while True:
+		body = dict(payload)
+		if cursor:
+			body["start_cursor"] = cursor
+		r = requests.post(url, headers=_headers(token), json=body)
+		r.raise_for_status()
+		data = r.json()
+		rows.extend(data.get("results", []))
+		if not data.get("has_more"):
+			break
+		cursor = data.get("next_cursor")
+	# nếu không có status_prop nhưng có status_equals -> lọc client-side
+	if status_equals and not status_prop:
+		kept = []
+		for it in rows:
+			st = _any_status(it.get("properties", {}))
+			if _normalize(st) == _normalize(status_equals):
+				kept.append(it)
+		rows = kept
+	return rows
 
 def build_html(rows: List[Dict[str,Any]]) -> str:
     if not rows:
@@ -349,8 +385,17 @@ def main():
                 except requests.HTTPError as e:
                     print(f"HTTPError khi query DB {dbid}: {e}")
                     continue
+                # Lấy thêm các công việc đang thực hiện (không quan tâm deadline)
+                try:
+                    in_progress_rows = query_status(token, dbid, status_equals=status_equals)
+                except requests.HTTPError as e:
+                    print(f"HTTPError khi query status DB {dbid}: {e}")
+                    in_progress_rows = []
                 title = _db_title(token, dbid)
-                html = f"<h3>Database: {title}</h3>" + build_html(rows) + "<br>"
+                # Gộp 2 bảng: quá hạn và đang thực hiện
+                html = f"<h3>Database: {title}</h3>"
+                html += "<h4>Công việc quá hạn</h4>" + build_html(rows)
+                html += "<br><h4>Công việc đang thực hiện</h4>" + build_html(in_progress_rows) + "<br>"
                 try:
                     send_mail(recipients, html, smtp_cfg)
                     print(f"Sent. Database: {title} → {', '.join(recipients)}")
