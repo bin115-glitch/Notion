@@ -2,9 +2,8 @@ name: Notion Overdue Report
 
 on:
   schedule:
-    # Chạy 09:00 ICT (UTC+7) vào Thứ 3 & Thứ 5  -> 02:00 UTC
-    - cron: "0 2 * * 2,4"
-  workflow_dispatch: {}   # Bắt buộc để có nút “Run workflow”
+    - cron: "0 2 * * 1-5"   # 2:00 UTC = 9:00 VN, từ Thứ 2 (1) đến Thứ 6 (5)
+  workflow_dispatch: {}
 
 jobs:
   run-notion-script:
