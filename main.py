@@ -1,312 +1,408 @@
-import os, requests, smtplib, json
-from dotenv import load_dotenv
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+# -*- coding: utf-8 -*-
+"""
+main.py — Notion overdue mailer (JSON config)
+
+- Đọc notion_token.json (hoặc đường dẫn từ biến NOTION_CONFIG)
+- Token có thể lấy trực tiếp từ JSON hoặc từ biến môi trường (token_env)
+- Mỗi database có thể là DB ID *hoặc* URL Page/DB; code tự resolve child/linked DB
+- Tự dò schema: title/people/date/status; cho phép override bằng "schema"
+- Lọc: Deadline < hôm nay (UTC) + trạng thái = status_equals (mặc định: "Đang thực hiện")
+- Gửi 1 email/table cho mỗi DB tới danh sách recipients riêng
+"""
+import os
+import re
+import json
+import smtplib
+from typing import Optional, Tuple, Dict, Any, List
 from datetime import datetime, timezone
+import requests
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText 
+CONFIG_PATH = os.getenv("NOTION_CONFIG", "notion_token.json")
+DEFAULT_STATUS_EQUALS = "Đang thực hiện"
 
-load_dotenv()
+TITLE_CANDS    = ["Nội dung công việc", "Mục tiêu, hiệu quả dự án","Chi tiết công việc"]
+PIC_CANDS      = ["PIC", "Người phụ trách", "Owner", "Assignee"]
+START_CANDS    = ["Ngày bắt đầu", "Start Date", "Start date"]
+DEADLINE_CANDS = ["Deadline dự kiến", "Deadline", "Due date", "Due", "Ngày đến hạn"]
+STATUS_CANDS   = ["Trạng thái cuối cùng", "Tình trạng công việc trong tuần", "Tình trạng", "Status"]
 
-SMTP_HOST = os.getenv("SMTP_HOST","smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT","587"))
-SMTP_USER = os.getenv("SMTP_USER")
-SMTP_PASS = os.getenv("SMTP_PASS")
-for k,v in {"SMTP_USER":SMTP_USER,"SMTP_PASS":SMTP_PASS}.items():
-    if not v: raise SystemExit(f"Thiếu {k}")
 
-def query_overdue(token, database_id):
-    headers = {
+def _headers(token: str) -> Dict[str,str]:
+    return {
         "Authorization": f"Bearer {token}",
         "Notion-Version": "2022-06-28",
         "Content-Type": "application/json",
     }
-    today_iso = datetime.now(timezone.utc).date().isoformat()
-    url = f"https://api.notion.com/v1/databases/{database_id}/query"
-    prop_names = [
-        "Tình trạng công việc trong tuần",
-        "Trạng thái",
-        "Status",
-        "Tiến độ",
-        "Công việc",
-    ]
-    for prop_name in prop_names:
-        for prop_type in ["select", "status"]:
-            payload = {
-                "filter": {
-                    "and": [
-                        {"property": prop_name, prop_type: {"equals": "Đang thực hiện"}},
-                        {"property": "Deadline dự kiến", "date": {"before": today_iso}}
-                    ]
-                },
-                "page_size": 100
-            }
-            rows, cursor = [], None
-            while True:
-                body = dict(payload)
-                if cursor: body["start_cursor"] = cursor
-                r = requests.post(url, headers=headers, json=body)
-                if r.status_code == 401:
-                    print(f"401 Unauthorized cho DB {database_id}: token không hợp lệ hoặc không được share quyền.")
-                    return []
-                if r.status_code == 404:
-                    print(f"404 Not Found cho DB {database_id}: database không tồn tại hoặc token không có quyền truy cập.")
-                    return []
-                if r.status_code == 400:
-                    # Nếu lỗi property, thử tên khác
-                    err = r.json().get("message", "")
-                    if "Could not find property" in err or "property type" in err:
-                        break
-                    print(f"400 Bad Request cho DB {database_id}: kiểm tra lại database id, token, hoặc cấu trúc query.")
-                    print(f"Response: {r.text}")
-                    return []
-                r.raise_for_status()
-                data = r.json()
-                rows.extend(data.get("results", []))
-                if not data.get("has_more"): break
-                cursor = data.get("next_cursor")
-            if rows:
-                return rows
-    print(f"Không tìm thấy property trạng thái phù hợp trong DB {database_id}. Sẽ gửi email với bảng rỗng.")
-    return []
 
-def get_prop_text(props, key):
+def _extract_uuid(s: str) -> Optional[str]:
+    if not s:
+        return None
+    s = s.strip()
+    if s.startswith("http"):
+        s = s.split("?")[0].rstrip("/").rsplit("/", 1)[-1]
+    m = re.search(r"([0-9a-fA-F]{32}|[0-9a-fA-F-]{36})$", s)
+    return m.group(1).replace("-", "").lower() if m else None
+
+def resolve_db_ids(token: str, raw: str, max_depth: int = 3) -> List[str]:
+    """Return list of database ids (32-hex, no dashes). Accepts page/db URL or id."""
+    uid = _extract_uuid(raw)
+    if not uid:
+        raise ValueError(f"Không trích được UUID từ: {raw}")
+    h = _headers(token)
+    r = requests.get(f"https://api.notion.com/v1/databases/{uid}", headers=h)
+    if r.status_code == 200:
+        return [uid]
+    r = requests.get(f"https://api.notion.com/v1/pages/{uid}", headers=h)
+    if r.status_code != 200:
+        raise ValueError("Không phải database/page hoặc token không có quyền.")
+    def walk(block_id: str, depth: int) -> List[str]:
+        if depth < 0:
+            return []
+        out: List[str] = []
+        cursor = None
+        while True:
+            params = {"page_size": 100}
+            if cursor:
+                params["start_cursor"] = cursor
+            rr = requests.get(f"https://api.notion.com/v1/blocks/{block_id}/children", headers=h, params=params)
+            rr.raise_for_status()
+            data = rr.json()
+            for b in data.get("results", []):
+                t = b.get("type")
+                if t == "child_database":
+                    out.append(b["id"].replace("-", "").lower())
+                elif t == "link_to_database":
+                    did = b[t].get("database_id")
+                    if did:
+                        out.append(did.replace("-", "").lower())
+                if b.get("has_children"):
+                    out += walk(b["id"], depth - 1)
+            if not data.get("has_more"):
+                break
+            cursor = data.get("next_cursor")
+        # unique
+        seen = {}
+        return [seen.setdefault(x, x) for x in out if x not in seen]
+    ids = walk(uid, max_depth)
+    if not ids:
+        raise ValueError("Page không chứa database (hoặc chưa Add connection).")
+    return ids
+
+def _get_db_props(token: str, dbid: str) -> Dict[str,Any]:
+    r = requests.get(f"https://api.notion.com/v1/databases/{dbid}", headers=_headers(token))
+    r.raise_for_status()
+    return r.json().get("properties", {})
+
+def _db_title(token: str, dbid: str) -> str:
+    try:
+        r = requests.get(f"https://api.notion.com/v1/databases/{dbid}", headers=_headers(token))
+        if r.status_code != 200:
+            return dbid
+        obj = r.json()
+        title = "".join(t.get("plain_text", "") for t in (obj.get("title") or []))
+        return title or dbid
+    except Exception:
+        return dbid
+
+def _normalize(s: str) -> str:
+    return " ".join((s or "").split()).lower()
+
+def _find_prop_by_name(props: Dict[str,Any], target_name: str, want_types=("status","select","date")) -> Optional[Dict[str,str]]:
+    norm = _normalize(target_name)
+    for name, meta in props.items():
+        if _normalize(name) == norm and meta.get("type") in want_types:
+            return {"name": name, "id": meta["id"], "type": meta["type"]}
+    return None
+
+def _pick_deadline_col(props: Dict[str,Any]) -> Optional[Dict[str,str]]:
+    for name in DEADLINE_CANDS:
+        meta = props.get(name)
+        if meta and meta.get("type") == "date":
+            return {"name": name, "id": meta["id"], "type": "date"}
+    for name, meta in props.items():
+        if meta.get("type") == "date":
+            return {"name": name, "id": meta["id"], "type": "date"}
+    return None
+
+# ---- value extractors (robust to naming) ----
+def _get_text(props: Dict[str,Any], key: str) -> str:
     v = props.get(key, {})
     t = v.get("type")
-    if t == "title": return "".join(x.get("plain_text","") for x in v.get("title",[]))
-    if t == "rich_text": return "".join(x.get("plain_text","") for x in v.get("rich_text",[]))
+    if t == "title":
+        return "".join(x.get("plain_text", "") for x in v.get("title", []))
+    if t == "rich_text":
+        return "".join(x.get("plain_text", "") for x in v.get("rich_text", []))
     return ""
 
-# Thêm helper để thử nhiều tên property và nhiều kiểu dữ liệu
-def find_property_value(props, keys):
-    for key in keys:
-        p = props.get(key)
-        if not p:
+def _pick_first(props: Dict[str,Any], names: List[str], want_type: Optional[str] = None):
+    for k in names:
+        v = props.get(k)
+        if not v:
             continue
-        t = p.get("type")
-        # select / status
-        if t == "select":
-            return p.get("select",{}).get("name","")
-        if t == "status":
-            return p.get("status",{}).get("name","")
-        # title / rich_text
-        if t in ("title","rich_text"):
-            return get_prop_text(props, key)
-        # people
-        if t == "people":
-            ppl = p.get("people")
-            if isinstance(ppl, list) and ppl:
-                return ppl[0].get("name") or ppl[0].get("person",{}).get("email","")
-        # formula (thường trả về string hoặc select inside)
-        if t == "formula":
-            f = p.get("formula",{})
-            return f.get("string") or (f.get("select") or {}).get("name","") or ""
-        # rollup: cố gắng lấy string hoặc phần tử đầu tiên
-        if t == "rollup":
-            r = p.get("rollup",{})
-            if r.get("type") == "array":
-                arr = r.get("array",[])
-                if arr:
-                    first = arr[0]
-                    if first.get("type") == "title":
-                        return "".join(x.get("plain_text","") for x in first.get("title",[]))
-                    if first.get("type") == "rich_text":
-                        return "".join(x.get("plain_text","") for x in first.get("rich_text",[]))
-            return r.get("string","") or ""
-        # fallback: cố gắng dùng một vài trường con phổ biến
-        for sub in ("select","status","rich_text","title","formula","rollup"):
-            subv = p.get(sub)
-            if isinstance(subv, dict):
-                return subv.get("name","") or subv.get("string","")
+        if want_type is None or v.get("type") == want_type:
+            return k, v
+    return None, None
+
+def _any_status(props: Dict[str,Any]) -> str:
+    name, v = _pick_first(props, STATUS_CANDS)
+    if v:
+        t = v.get("type")
+        if t in ("status", "select"):
+            return (v.get(t) or {}).get("name", "")
+    for vv in props.values():
+        t = vv.get("type")
+        if t in ("status","select"):
+            return (vv.get(t) or {}).get("name", "")
     return ""
 
-# Thêm helper để lấy giá date từ nhiều kiểu property (date, created_time, formula, rollup...)
-def find_date_value(props, keys):
-    for key in keys:
-        p = props.get(key)
-        if not p:
-            continue
-        t = p.get("type")
-        # date property
-        if t == "date":
-            d = p.get("date", {})
-            return d.get("start") or d.get("end") or ""
-        # created_time / last_edited_time
-        if t == "created_time":
-            return p.get("created_time","")
-        if t == "last_edited_time":
-            return p.get("last_edited_time","")
-        # formula: may contain date or string
-        if t == "formula":
-            f = p.get("formula",{})
-            if f.get("type") == "date":
-                return (f.get("date",{}) or {}).get("start","") or (f.get("date",{}) or {}).get("end","") or ""
-            return f.get("string","") or ""
-        # rollup: try array/date/string
-        if t == "rollup":
-            r = p.get("rollup",{})
-            if r.get("type") == "array":
-                arr = r.get("array",[])
-                for item in arr:
-                    if item.get("type") == "date":
-                        return (item.get("date",{}) or {}).get("start","")
-                    if item.get("type") in ("title","rich_text"):
-                        # try extract plain text
-                        if item.get("type") == "title":
-                            return "".join(x.get("plain_text","") for x in item.get("title",[]))
-                        if item.get("type") == "rich_text":
-                            return "".join(x.get("plain_text","") for x in item.get("rich_text",[]))
-            if r.get("type") == "date":
-                return (r.get("date",{}) or {}).get("start","") or ""
-            return r.get("string","") or ""
-        # fallback: sometimes date-like info might sit under 'rich_text' or 'title'
-        if t in ("title","rich_text"):
-            txt = get_prop_text(props, key)
-            if txt:
-                return txt
+def _any_people(props: Dict[str,Any]) -> str:
+    name, v = _pick_first(props, PIC_CANDS)
+    if v and v.get("type") == "people":
+        ppl = v.get("people") or []
+        if ppl:
+            return ppl[0].get("name") or ppl[0].get("person", {}).get("email", "")
+    if v and v.get("type") == "select":
+        return (v.get("select") or {}).get("name", "")
+    for vv in props.values():
+        if vv.get("type") == "people":
+            ppl = vv.get("people") or []
+            if ppl:
+                return ppl[0].get("name") or ppl[0].get("person", {}).get("email", "")
     return ""
 
-def cell_text(prop):
-    # Nội dung: ưu tiên "Nội dung công việc", fallback sang "Tên dự án"/"Name"/...
-    name = get_prop_text(prop, "Nội dung công việc")
-    if not name:
-        name = find_property_value(prop, ["Tên dự án", "Name", "Project name", "Project", "Tên"]) or ""
-    # PIC: thử people trước, fallback vào select/name
-    pic = ""
-    ppl_prop = prop.get("PIC") or prop.get("Người phụ trách") or prop.get("Người đảm nhiệm") or prop.get("Pic")
-    if ppl_prop:
-        if ppl_prop.get("type") == "people":
-            ppl = ppl_prop.get("people")
-            if isinstance(ppl, list) and ppl:
-                pic = ppl[0].get("name") or ppl[0].get("person",{}).get("email","")
-        else:
-            pic = (ppl_prop.get("select",{}) or {}).get("name","") or get_prop_text(prop, "PIC")
-    # Start / Deadline: dùng helper để thử nhiều tên/kiểu
-    start_keys = [
-        "Start date", "Start", "Start Date", "Ngày bắt đầu", "Ngày bắt đầu dự kiến", "Ngày bắt đầu (Start)"
-    ]
-    dl_keys = [
-        "Deadline dự kiến", "Deadline", "Due date", "Ngày kết thúc", "Ngày dự kiến kết thúc"
-    ]
-    start = find_date_value(prop, start_keys) or ""
-    dl    = find_date_value(prop, dl_keys) or ""
-    # Trạng thái: thử nhiều tên property và kiểu khác nhau
-    status_keys = [
-        "Tình trạng công việc trong tuần",
-        "Trạng thái",
-        "Status",
-        "Tiến độ",
-        "Trạng thái công việc",
-        "Trạng thái tuần"
-    ]
-    stt = find_property_value(prop, status_keys) or ""
-    return pic, (start[:10] if start else ""), (dl[:10] if dl else ""), stt, name
+def _any_date(props: Dict[str,Any], names: List[str]) -> str:
+    k, v = _pick_first(props, names, want_type="date")
+    if v:
+        s = (v.get("date") or {}).get("start", "")
+        return s[:10] if s else ""
+    for vv in props.values():
+        if vv.get("type") == "date":
+            s = (vv.get("date") or {}).get("start", "")
+            return s[:10] if s else ""
+    return ""
 
-def build_html(rows):
-    if not rows: return "<p>Không có công việc quá hạn 🎉</p>"
-    head = """
-    <table style="border-collapse:collapse;width:100%">
-      <thead><tr>
-        <th style="border:1px solid #000;padding:6px">PIC</th>
-        <th style="border:1px solid #000;padding:6px">Start</th>
-        <th style="border:1px solid #000;padding:6px">Deadline</th>
-        <th style="border:1px solid #000;padding:6px">Trạng thái</th>
-        <th style="border:1px solid #000;padding:6px">Nội dung công việc</th>
-      </tr></thead><tbody>
-    """
-    body = ""
+def _any_title(props: Dict[str,Any]) -> str:
+    for k, v in props.items():
+        if v.get("type") == "title":
+            return "".join(x.get("plain_text", "") for x in v.get("title", []))
+    for k in TITLE_CANDS:
+        t = _get_text(props, k)
+        if t:
+            return t
+    return ""
+
+def cell_text(props: Dict[str,Any]) -> tuple[str,str,str,str,str]:
+    name  = _any_title(props)
+    pic   = _any_people(props)
+    start = _any_date(props, START_CANDS)
+    dl    = _any_date(props, DEADLINE_CANDS)
+    stt   = _any_status(props)
+    return pic, start, dl, stt, name
+
+def query_overdue(token: str, database_id: str, schema: Optional[Dict[str,str]] = None, status_equals: Optional[str] = DEFAULT_STATUS_EQUALS) -> List[Dict[str,Any]]:
+    props = _get_db_props(token, database_id)
+    # Deadline
+    if schema and schema.get("deadline") in props and props[schema["deadline"]]["type"] == "date":
+        meta = props[schema["deadline"]]
+        deadline_prop = {"name": schema["deadline"], "id": meta["id"], "type": "date"}
+    else:
+        deadline_prop = _pick_deadline_col(props)
+    # Status
+    status_prop = None
+    if schema and schema.get("status"):
+        status_prop = _find_prop_by_name(props, schema["status"], want_types=("status","select"))
+    if not status_prop:
+        for nm in STATUS_CANDS:
+            status_prop = _find_prop_by_name(props, nm, want_types=("status","select"))
+            if status_prop:
+                break
+        if not status_prop:
+            for name, meta in props.items():
+                if meta.get("type") in ("status","select"):
+                    status_prop = {"name": name, "id": meta["id"], "type": meta["type"]}
+                    break
+    today_iso = datetime.now(timezone.utc).date().isoformat()
+    url = f"https://api.notion.com/v1/databases/{database_id}/query"
+    filters = []
+    if deadline_prop:
+        filters.append({"property": deadline_prop["id"], "date": {"before": today_iso}})
+    payload = {"page_size": 100}
+    if status_equals and status_prop:
+        operator = status_prop["type"]
+        filters.append({"property": status_prop["id"], operator: {"equals": status_equals}})
+    if filters:
+        payload["filter"] = {"and": filters}
+    rows: List[Dict[str,Any]] = []
+    cursor = None
+    while True:
+        body = dict(payload)
+        if cursor:
+            body["start_cursor"] = cursor
+        r = requests.post(url, headers=_headers(token), json=body)
+        r.raise_for_status()
+        data = r.json()
+        rows.extend(data.get("results", []))
+        if not data.get("has_more"):
+            break
+        cursor = data.get("next_cursor")
+    if status_equals and not status_prop:
+        kept = []
+        for it in rows:
+            st = _any_status(it.get("properties", {}))
+            if _normalize(st) == _normalize(status_equals):
+                kept.append(it)
+        rows = kept
+    return rows
+
+# Thêm: truy vấn theo trạng thái (không lọc theo deadline)
+def query_status(token: str, database_id: str, status_equals: Optional[str] = DEFAULT_STATUS_EQUALS) -> List[Dict[str,Any]]:
+	props = _get_db_props(token, database_id)
+	# tìm property status giống query_overdue
+	status_prop = None
+	for nm in STATUS_CANDS:
+		status_prop = _find_prop_by_name(props, nm, want_types=("status","select"))
+		if status_prop:
+			break
+	if not status_prop:
+		for name, meta in props.items():
+			if meta.get("type") in ("status","select"):
+				status_prop = {"name": name, "id": meta["id"], "type": meta["type"]}
+				break
+	url = f"https://api.notion.com/v1/databases/{database_id}/query"
+	payload = {"page_size": 100}
+	if status_equals and status_prop:
+		operator = status_prop["type"]
+		payload["filter"] = {"property": status_prop["id"], operator: {"equals": status_equals}}
+	rows: List[Dict[str,Any]] = []
+	cursor = None
+	while True:
+		body = dict(payload)
+		if cursor:
+			body["start_cursor"] = cursor
+		r = requests.post(url, headers=_headers(token), json=body)
+		r.raise_for_status()
+		data = r.json()
+		rows.extend(data.get("results", []))
+		if not data.get("has_more"):
+			break
+		cursor = data.get("next_cursor")
+	# nếu không có status_prop nhưng có status_equals -> lọc client-side
+	if status_equals and not status_prop:
+		kept = []
+		for it in rows:
+			st = _any_status(it.get("properties", {}))
+			if _normalize(st) == _normalize(status_equals):
+				kept.append(it)
+		rows = kept
+	return rows
+
+def build_html(rows: List[Dict[str,Any]]) -> str:
+    if not rows:
+        return "<p>Không có công việc quá hạn 🎉</p>"
+    head = (
+        "<table style=\"border-collapse:collapse;width:100%\">"
+        "<thead><tr>"
+        "<th style='border:1px solid #000;padding:6px'>PIC</th>"
+        "<th style='border:1px solid #000;padding:6px'>Start</th>"
+        "<th style='border:1px solid #000;padding:6px'>Deadline</th>"
+        "<th style='border:1px solid #000;padding:6px'>Trạng thái</th>"
+        "<th style='border:1px solid #000;padding:6px'>Nội dung công việc</th>"
+        "</tr></thead><tbody>"
+    )
+    body = []
     for it in rows:
-        pic, start, dl, stt, name = cell_text(it["properties"])
-        body += f"""<tr>
-          <td style="border:1px solid #000;padding:6px">{pic}</td>
-          <td style="border:1px solid #000;padding:6px">{start}</td>
-          <td style="border:1px solid #000;padding:6px">{dl}</td>
-          <td style="border:1px solid #000;padding:6px">{stt}</td>
-          <td style="border:1px solid #000;padding:6px">{name}</td>
-        </tr>"""
-    return head + body + "</tbody></table>"
+        pic, start, dl, stt, name = cell_text(it.get("properties", {}))
+        body.append(
+            "<tr>"
+            f"<td style='border:1px solid #000;padding:6px'>{pic}</td>"
+            f"<td style='border:1px solid #000;padding:6px'>{start}</td>"
+            f"<td style='border:1px solid #000;padding:6px'>{dl}</td>"
+            f"<td style='border:1px solid #000;padding:6px'>{stt}</td>"
+            f"<td style='border:1px solid #000;padding:6px'>{name}</td>"
+            "</tr>"
+        )
+    return head + "".join(body) + "</tbody></table>"
 
-def send_mail(html, mail_to):
-    """
-    mail_to: list[str] hoặc comma-separated string.
-    Nếu trống, fallback sang env MAIL_TO (có thể là comma-separated).
-    """
-    # chuẩn hoá mail_to
-    if not mail_to:
-        env_to = os.getenv("MAIL_TO","").strip()
-        if env_to:
-            mail_to = [x.strip() for x in env_to.split(",") if x.strip()]
-        else:
-            print("No recipients provided (neither in JSON nor MAIL_TO env). Skipping send.")
-            return False
-    if isinstance(mail_to, str):
-        mail_to = [x.strip() for x in mail_to.split(",") if x.strip()]
-    if not isinstance(mail_to, list):
-        mail_to = list(mail_to)
-
+def send_mail(to_list: List[str], html: str, smtp_cfg: Dict[str,Any]):
     msg = MIMEMultipart("alternative")
     msg["Subject"] = "Thông báo trễ hạn (Notion)"
-    msg["From"] = SMTP_USER
-    msg["To"] = ", ".join(mail_to)
+    msg["From"] = smtp_cfg["user"]
+    msg["To"] = ", ".join(to_list)
     msg.attach(MIMEText(html, "html", "utf-8"))
-    try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
-            s.starttls()
-            s.login(SMTP_USER, SMTP_PASS)
-            s.sendmail(SMTP_USER, mail_to, msg.as_string())
-        return True
-    except Exception as e:
-        print(f"Error sending mail to {mail_to}: {e}")
-        return False
+    with smtplib.SMTP(smtp_cfg.get("host","smtp.gmail.com"), int(smtp_cfg.get("port",587))) as s:
+        s.starttls()
+        s.login(smtp_cfg["user"], smtp_cfg["pass"])
+        s.sendmail(smtp_cfg["user"], to_list, msg.as_string())
 
-def get_database_title(token, database_id):
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Notion-Version": "2022-06-28",
-    }
-    url = f"https://api.notion.com/v1/databases/{database_id}"
-    try:
-        r = requests.get(url, headers=headers, timeout=10)
-    except Exception:
-        return ""
-    if r.status_code != 200:
-        return ""
-    data = r.json()
-    title_field = data.get("title", []) or []
-    if isinstance(title_field, list) and title_field:
-        parts = []
-        for t in title_field:
-            if not isinstance(t, dict):
+def load_config():
+    with open(CONFIG_PATH, encoding="utf-8") as f:
+        cfg = json.load(f)
+    # tokens
+    token_entries = []
+    for t in cfg.get("notion_tokens", []):
+        tok = t.get("token")
+        if not tok and t.get("token_env"):
+            tok = os.getenv(t["token_env"], "")
+        if not tok:
+            raise SystemExit("Thiếu Notion token (token hoặc token_env).")
+        token_entries.append({"token": tok, "databases": t.get("databases", [])})
+    # smtp
+    smtp = cfg.get("smtp")
+    if not smtp:
+        envmap = cfg.get("smtp_env", {})
+        try:
+            smtp = {
+                "host": os.environ[envmap["host"]],
+                "port": int(os.environ[envmap["port"]]),
+                "user": os.environ[envmap["user"]],
+                "pass": os.environ[envmap["pass"]],
+            }
+        except Exception as e:
+            raise SystemExit(f"Thiếu cấu hình SMTP (block 'smtp' hoặc 'smtp_env'): {e}")
+    return token_entries, smtp
+
+def main():
+    token_entries, smtp_cfg = load_config()
+    sent = 0
+    for idx, t in enumerate(token_entries, 1):
+        token = t["token"]
+        for db in t.get("databases", []):
+            raw = (db.get("id") or "").strip()
+            recipients = [x.strip() for x in db.get("recipients", []) if x.strip()]
+            if not raw or not recipients:
                 continue
-            # prefer plain_text, fallback to text.content
-            pt = t.get("plain_text") or (t.get("text") or {}).get("content") or ""
-            if pt:
-                parts.append(pt)
-        title = "".join(parts).strip()
-        return title
-    return ""
+            schema = db.get("schema") or None
+            status_equals = db.get("status_equals", DEFAULT_STATUS_EQUALS)
+            try:
+                dbids = resolve_db_ids(token, raw)
+            except Exception as e:
+                print(f"Skip '{raw}': {e}")
+                continue
+            for dbid in dbids:
+                try:
+                    rows = query_overdue(token, dbid, schema=schema, status_equals=status_equals)
+                except requests.HTTPError as e:
+                    print(f"HTTPError khi query DB {dbid}: {e}")
+                    continue
+                # Lấy thêm các công việc đang thực hiện (không quan tâm deadline)
+                try:
+                    in_progress_rows = query_status(token, dbid, status_equals=status_equals)
+                except requests.HTTPError as e:
+                    print(f"HTTPError khi query status DB {dbid}: {e}")
+                    in_progress_rows = []
+                title = _db_title(token, dbid)
+                # Gộp 2 bảng: quá hạn và đang thực hiện
+                html = f"<h3>Database: {title}</h3>"
+                html += "<h4>Công việc quá hạn</h4>" + build_html(rows)
+                html += "<br><h4>Công việc đang thực hiện</h4>" + build_html(in_progress_rows) + "<br>"
+                try:
+                    send_mail(recipients, html, smtp_cfg)
+                    print(f"Sent. Database: {title} → {', '.join(recipients)}")
+                    sent += 1
+                except Exception as e:
+                    print(f"Gửi mail lỗi cho DB {title}: {e}")
+    print(f"Done. Emails sent: {sent}")
 
 if __name__ == "__main__":
-    with open("notion_token.json", encoding="utf-8") as f:
-        data = json.load(f)
-
-    sent_count = 0
-    for token_obj in data.get("notion_tokens", []):
-        token = token_obj["token"]
-        for db in token_obj.get("databases", []):
-            dbid = db["id"]
-            # recipients phải lấy từ JSON; nếu không có thì dùng env MAIL_TO như fallback
-            recipients = db.get("recipients") or []
-            rows = query_overdue(token, dbid)
-            if not rows:
-                print(f"Không có công việc quá hạn trong DB {dbid}.")
-            db_title = get_database_title(token, dbid) or dbid
-            html = f"<h3>Database: {db_title}</h3>" + build_html(rows)
-            if recipients or os.getenv("MAIL_TO"):
-                ok = send_mail(html, recipients)
-                if ok:
-                    print(f"Sent. Database: {dbid} to {', '.join(recipients) if recipients else os.getenv('MAIL_TO')}")
-                    sent_count += 1
-                else:
-                    print(f"Failed to send. Database: {dbid}")
-            else:
-                print(f"No recipients for DB {dbid}; skipped sending.")
-    print(f"Sent. Databases: {sent_count}")
+    main()
