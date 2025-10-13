@@ -2,23 +2,19 @@ name: Notion Overdue Report
 
 on:
   schedule:
-    - cron: "0 1 * * 1-5"      # 01:00 UTC = 08:00 VN, chạy Thứ 2–6
+    - cron: "0 1 * * 1-5"   # 01:00 UTC = 08:00 VN, chạy Thứ 2–6
   workflow_dispatch: {}
 
 jobs:
   run-notion-script:
     runs-on: ubuntu-latest
 
-    env:
-      NOTION_VERSION: "2022-06-28"
-      DB_ID: "25a5be1a5701810bac83e27f14902dc3"
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
           python-version: "3.11"
 
@@ -31,72 +27,40 @@ jobs:
             pip install requests python-dotenv
           fi
 
-      # Luôn tạo notion_token.json từ secrets (không lưu token trong repo)
-      - name: Prepare notion_token.json
+      # Nếu có secret NOTION_CONFIG -> ghi đè notion_token.json từ secret
+      # Nếu không có -> dùng file notion_token.json có sẵn trong repo
+      - name: Prepare notion_token.json (use secret if provided)
         shell: bash
         env:
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          SMTP_HOST:  ${{ secrets.SMTP_HOST }}
-          SMTP_PORT:  ${{ secrets.SMTP_PORT }}
-          SMTP_USER:  ${{ secrets.SMTP_USER }}
-          SMTP_PASS:  ${{ secrets.SMTP_PASS }}
+          CFG: ${{ secrets.NOTION_CONFIG }}
         run: |
-          set -e
-          test -n "$NOTION_TOKEN" || { echo "❌ NOTION_TOKEN secret is empty"; exit 1; }
-          cat > notion_token.json <<'JSON'
-          {
-            "notion_tokens": [
-              {
-                "name": "Primary",
-                "token_env": "NOTION_TOKEN",
-                "databases": [
-                  { "id": "25a5be1a5701810bac83e27f14902dc3", "name": "Overdue DB" }
-                ]
-              }
-            ],
-            "smtp_env": {
-              "host": "SMTP_HOST",
-              "port": "SMTP_PORT",
-              "user": "SMTP_USER",
-              "pass": "SMTP_PASS"
-            }
-          }
-          JSON
-          echo "✅ Wrote notion_token.json ($(wc -c < notion_token.json) bytes)"
+          if [ -n "$CFG" ]; then
+            printf '%s' "$CFG" > notion_token.json
+            echo "Wrote notion_token.json from secret ($(wc -c < notion_token.json) bytes)"
+          else
+            test -f notion_token.json || { echo "❌ missing notion_token.json"; exit 1; }
+            echo "Using notion_token.json from repo ($(wc -c < notion_token.json) bytes)"
+          fi
 
-      - name: Sanity check Notion token & DB access
-        shell: bash
-        env:
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NOTION_VERSION: "2022-06-28"
-          DB_ID: "25a5be1a5701810bac83e27f14902dc3"
+      - name: Validate config JSON
         run: |
-          set -e
-          test -n "$NOTION_TOKEN" || { echo "❌ NOTION_TOKEN empty"; exit 1; }
-      
-          echo "Token length: $(echo -n "$NOTION_TOKEN" | wc -c)"
-      
-          echo "Check /users/me..."
-          code_users=$(curl -sS -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer $NOTION_TOKEN" \
-            -H "Notion-Version: $NOTION_VERSION" \
-            https://api.notion.com/v1/users/me)
-          [ "$code_users" = "200" ] || { echo "❌ users/me HTTP $code_users"; exit 1; }
-      
-          echo "Check database visibility..."
-          code_db=$(curl -sS -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer $NOTION_TOKEN" \
-            -H "Notion-Version: $NOTION_VERSION" \
-            https://api.notion.com/v1/databases/$DB_ID)
-          case "$code_db" in
-            200) echo "✅ DB visible";;
-            404) echo "❌ DB not found or not shared with the bot"; exit 1;;
-            *)   echo "❌ Unexpected DB check status: $code_db"; exit 1;;
-          esac
-
+          python - <<'PY'
+          import json, sys, pathlib
+          p = pathlib.Path("notion_token.json")
+          try:
+              cfg = json.loads(p.read_text(encoding="utf-8"))
+          except Exception as e:
+              print("❌ JSON lỗi:", e); sys.exit(1)
+          toks = cfg.get("notion_tokens", [])
+          print(f"✅ Config OK. Tokens: {len(toks)}")
+          for i, t in enumerate(toks, 1):
+              print(f"  - Token #{i}: {len(t.get('databases', []))} DB")
+          print("SMTP in JSON:", "smtp" in cfg, "| smtp_env:", cfg.get("smtp_env", {}))
+          PY
 
       - name: Run notifier
         env:
+          # Nếu notion_token.json dùng token_env/smtp_env thì map sang secrets ở đây
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           SMTP_HOST:    ${{ secrets.SMTP_HOST }}
           SMTP_PORT:    ${{ secrets.SMTP_PORT }}
@@ -104,4 +68,4 @@ jobs:
           SMTP_PASS:    ${{ secrets.SMTP_PASS }}
           NOTION_CONFIG: notion_token.json
         run: |
-          python main.py   # đổi lại nếu script tên khác
+          python main.py   # đổi lại nếu script của bạn có tên khác
