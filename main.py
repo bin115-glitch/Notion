@@ -25,7 +25,7 @@ TITLE_CANDS    = ["Nội dung công việc", "Mục tiêu, hiệu quả dự án
 PIC_CANDS      = ["PIC", "Người phụ trách", "Owner", "Assignee"]
 START_CANDS    = ["Ngày bắt đầu", "Start Date", "Start date"]
 DEADLINE_CANDS = ["Deadline dự kiến", "Deadline", "Due date", "Due", "Ngày đến hạn"]
-STATUS_CANDS   = ["Tình trạng công việc trong tuần", "Tình trạng", "Status", "Trạng thái cuối cùng"]
+STATUS_CANDS   = ["Trạng thái cuối cùng", "Tình trạng công việc trong tuần", "Tình trạng", "Status"]
 
 
 def _headers(token: str) -> Dict[str,str]:
