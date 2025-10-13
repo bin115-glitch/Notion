@@ -73,16 +73,16 @@ jobs:
         run: |
           set -e
           test -n "$NOTION_TOKEN" || { echo "❌ NOTION_TOKEN empty"; exit 1; }
-
+      
           echo "Token length: $(echo -n "$NOTION_TOKEN" | wc -c)"
-
+      
           echo "Check /users/me..."
           code_users=$(curl -sS -o /dev/null -w "%{http_code}" \
             -H "Authorization: Bearer $NOTION_TOKEN" \
             -H "Notion-Version: $NOTION_VERSION" \
             https://api.notion.com/v1/users/me)
           [ "$code_users" = "200" ] || { echo "❌ users/me HTTP $code_users"; exit 1; }
-
+      
           echo "Check database visibility..."
           code_db=$(curl -sS -o /dev/null -w "%{http_code}" \
             -H "Authorization: Bearer $NOTION_TOKEN" \
@@ -93,6 +93,7 @@ jobs:
             404) echo "❌ DB not found or not shared with the bot"; exit 1;;
             *)   echo "❌ Unexpected DB check status: $code_db"; exit 1;;
           esac
+
 
       - name: Run notifier
         env:
