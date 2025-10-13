@@ -36,7 +36,6 @@ jobs:
         shell: bash
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          # nếu gửi mail thì map thêm:
           SMTP_HOST:  ${{ secrets.SMTP_HOST }}
           SMTP_PORT:  ${{ secrets.SMTP_PORT }}
           SMTP_USER:  ${{ secrets.SMTP_USER }}
@@ -44,7 +43,6 @@ jobs:
         run: |
           set -e
           test -n "$NOTION_TOKEN" || { echo "❌ NOTION_TOKEN secret is empty"; exit 1; }
-
           cat > notion_token.json <<'JSON'
           {
             "notion_tokens": [
@@ -64,15 +62,20 @@ jobs:
             }
           }
           JSON
-
           echo "✅ Wrote notion_token.json ($(wc -c < notion_token.json) bytes)"
 
       - name: Sanity check Notion token & DB access
         shell: bash
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_VERSION: "2022-06-28"
+          DB_ID: "25a5be1a5701810bac83e27f14902dc3"
         run: |
           set -e
+          test -n "$NOTION_TOKEN" || { echo "❌ NOTION_TOKEN empty"; exit 1; }
+
+          echo "Token length: $(echo -n "$NOTION_TOKEN" | wc -c)"
+
           echo "Check /users/me..."
           code_users=$(curl -sS -o /dev/null -w "%{http_code}" \
             -H "Authorization: Bearer $NOTION_TOKEN" \
@@ -87,7 +90,7 @@ jobs:
             https://api.notion.com/v1/databases/$DB_ID)
           case "$code_db" in
             200) echo "✅ DB visible";;
-            404) echo "❌ DB not found or not shared with the bot (HTTP 404)"; exit 1;;
+            404) echo "❌ DB not found or not shared with the bot"; exit 1;;
             *)   echo "❌ Unexpected DB check status: $code_db"; exit 1;;
           esac
 
