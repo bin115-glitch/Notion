@@ -57,6 +57,19 @@ jobs:
               print(f"  - Token #{i}: {len(t.get('databases', []))} DB")
           print("SMTP in JSON:", "smtp" in cfg, "| smtp_env:", cfg.get("smtp_env", {}))
           PY
+      - name: Prepare notion_token.json
+        run: |
+          cat > notion_token.json <<'JSON'
+          {
+            "tokens": [
+              {
+                "name": "default",
+                "token": "${{ secrets.NOTION_TOKEN }}",
+                "databases": ["${{ secrets.NOTION_DATABASE_ID }}"]
+              }
+            ]
+          }
+          JSON
 
       - name: Run notifier
         env:
