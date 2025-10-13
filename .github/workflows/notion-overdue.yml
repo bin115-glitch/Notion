@@ -26,6 +26,15 @@ jobs:
         
     - name: Create config file
       run: |
+        # Extract recipients from email_recipients.json
+        RECIPIENTS=$(python -c "
+        import json
+        with open('email_recipients.json', 'r') as f:
+            data = json.load(f)
+        recipients = data.get('recipients', [])
+        print(','.join([f'\"{r}\"' for r in recipients]))
+        ")
+        
         cat > notion_token.json << EOF
         {
           "notion_tokens": [
@@ -33,7 +42,8 @@ jobs:
               "token": "${{ secrets.NOTION_TOKEN }}",
               "databases": [
                 {
-                  "id": "${{ secrets.NOTION_DATABASE_ID }}"
+                  "id": "${{ secrets.NOTION_DATABASE_ID }}",
+                  "recipients": [$RECIPIENTS]
                 }
               ]
             }
