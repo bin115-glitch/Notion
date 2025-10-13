@@ -67,7 +67,13 @@ jobs:
                 "token": "${{ secrets.NOTION_TOKEN }}",
                 "databases": ["${{ secrets.NOTION_DATABASE_ID }}"]
               }
-            ]
+            ],
+            "smtp_env": {
+              "host": "SMTP_HOST",
+              "port": "SMTP_PORT",
+              "user": "SMTP_USER",
+              "pass": "SMTP_PASS"
+            }
           }
           JSON
 
