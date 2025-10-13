@@ -1,13 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-main.py — Notion overdue mailer (JSON config)
+main.py — Notion overdue mailer (Environment Variables)
 
-- Đọc notion_token.json (hoặc đường dẫn từ biến NOTION_CONFIG)
-- Token có thể lấy trực tiếp từ JSON hoặc từ biến môi trường (token_env)
-- Mỗi database có thể là DB ID *hoặc* URL Page/DB; code tự resolve child/linked DB
-- Tự dò schema: title/people/date/status; cho phép override bằng "schema"
-- Lọc: Deadline < hôm nay (UTC) + trạng thái = status_equals (mặc định: "Đang thực hiện")
-- Gửi 1 email/table cho mỗi DB tới danh sách recipients riêng
+- Đọc cấu hình từ environment variables
+- Hỗ trợ fallback về JSON config nếu cần
+- Bảo mật thông tin nhạy cảm
 """
 import os
 import re
@@ -17,7 +14,22 @@ from typing import Optional, Tuple, Dict, Any, List
 from datetime import datetime, timezone
 import requests
 from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText 
+from email.mime.text import MIMEText
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Environment variables với fallback
+NOTION_TOKEN = os.getenv("NOTION_TOKEN")
+NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
+EMAIL_RECIPIENTS = os.getenv("EMAIL_RECIPIENTS", "").split(",")
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER")
+SMTP_PASS = os.getenv("SMTP_PASS")
+
+# Fallback config path (nếu cần)
 CONFIG_PATH = os.getenv("NOTION_CONFIG", "notion_token.json")
 DEFAULT_STATUS_EQUALS = "Đang thực hiện"
 
@@ -257,45 +269,45 @@ def query_overdue(token: str, database_id: str, schema: Optional[Dict[str,str]] 
 
 # Thêm: truy vấn theo trạng thái (không lọc theo deadline)
 def query_status(token: str, database_id: str, status_equals: Optional[str] = DEFAULT_STATUS_EQUALS) -> List[Dict[str,Any]]:
-	props = _get_db_props(token, database_id)
-	# tìm property status giống query_overdue
-	status_prop = None
-	for nm in STATUS_CANDS:
-		status_prop = _find_prop_by_name(props, nm, want_types=("status","select"))
-		if status_prop:
-			break
-	if not status_prop:
-		for name, meta in props.items():
-			if meta.get("type") in ("status","select"):
-				status_prop = {"name": name, "id": meta["id"], "type": meta["type"]}
-				break
-	url = f"https://api.notion.com/v1/databases/{database_id}/query"
-	payload = {"page_size": 100}
-	if status_equals and status_prop:
-		operator = status_prop["type"]
-		payload["filter"] = {"property": status_prop["id"], operator: {"equals": status_equals}}
-	rows: List[Dict[str,Any]] = []
-	cursor = None
-	while True:
-		body = dict(payload)
-		if cursor:
-			body["start_cursor"] = cursor
-		r = requests.post(url, headers=_headers(token), json=body)
-		r.raise_for_status()
-		data = r.json()
-		rows.extend(data.get("results", []))
-		if not data.get("has_more"):
-			break
-		cursor = data.get("next_cursor")
-	# nếu không có status_prop nhưng có status_equals -> lọc client-side
-	if status_equals and not status_prop:
-		kept = []
-		for it in rows:
-			st = _any_status(it.get("properties", {}))
-			if _normalize(st) == _normalize(status_equals):
-				kept.append(it)
-		rows = kept
-	return rows
+    props = _get_db_props(token, database_id)
+    # tìm property status giống query_overdue
+    status_prop = None
+    for nm in STATUS_CANDS:
+        status_prop = _find_prop_by_name(props, nm, want_types=("status","select"))
+        if status_prop:
+            break
+    if not status_prop:
+        for name, meta in props.items():
+            if meta.get("type") in ("status","select"):
+                status_prop = {"name": name, "id": meta["id"], "type": meta["type"]}
+                break
+    url = f"https://api.notion.com/v1/databases/{database_id}/query"
+    payload = {"page_size": 100}
+    if status_equals and status_prop:
+        operator = status_prop["type"]
+        payload["filter"] = {"property": status_prop["id"], operator: {"equals": status_equals}}
+    rows: List[Dict[str,Any]] = []
+    cursor = None
+    while True:
+        body = dict(payload)
+        if cursor:
+            body["start_cursor"] = cursor
+        r = requests.post(url, headers=_headers(token), json=body)
+        r.raise_for_status()
+        data = r.json()
+        rows.extend(data.get("results", []))
+        if not data.get("has_more"):
+            break
+        cursor = data.get("next_cursor")
+    # nếu không có status_prop nhưng có status_equals -> lọc client-side
+    if status_equals and not status_prop:
+        kept = []
+        for it in rows:
+            st = _any_status(it.get("properties", {}))
+            if _normalize(st) == _normalize(status_equals):
+                kept.append(it)
+        rows = kept
+    return rows
 
 def build_html(rows: List[Dict[str,Any]]) -> str:
     if not rows:
@@ -335,35 +347,65 @@ def send_mail(to_list: List[str], html: str, smtp_cfg: Dict[str,Any]):
         s.login(smtp_cfg["user"], smtp_cfg["pass"])
         s.sendmail(smtp_cfg["user"], to_list, msg.as_string())
 
-def load_config():
-    with open(CONFIG_PATH, encoding="utf-8") as f:
-        cfg = json.load(f)
-    # tokens
-    token_entries = []
-    for t in cfg.get("notion_tokens", []):
-        tok = t.get("token")
-        if not tok and t.get("token_env"):
-            tok = os.getenv(t["token_env"], "")
-        if not tok:
-            raise SystemExit("Thiếu Notion token (token hoặc token_env).")
-        token_entries.append({"token": tok, "databases": t.get("databases", [])})
-    # smtp
-    smtp = cfg.get("smtp")
-    if not smtp:
-        envmap = cfg.get("smtp_env", {})
-        try:
-            smtp = {
-                "host": os.environ[envmap["host"]],
-                "port": int(os.environ[envmap["port"]]),
-                "user": os.environ[envmap["user"]],
-                "pass": os.environ[envmap["pass"]],
+def load_config_from_env() -> Dict[str, Any]:
+    """Load configuration from environment variables"""
+    missing = []
+    if not NOTION_TOKEN:
+        missing.append("NOTION_TOKEN")
+    if not NOTION_DATABASE_ID:
+        missing.append("NOTION_DATABASE_ID")
+    if not SMTP_USER:
+        missing.append("SMTP_USER")
+    if not SMTP_PASS:
+        missing.append("SMTP_PASS")
+    
+    if missing:
+        raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
+    
+    return {
+        "notion_tokens": [
+            {
+                "token": NOTION_TOKEN,
+                "databases": [
+                    {
+                        "id": NOTION_DATABASE_ID,
+                        "recipients": [email.strip() for email in EMAIL_RECIPIENTS if email.strip()]
+                    }
+                ]
             }
-        except Exception as e:
-            raise SystemExit(f"Thiếu cấu hình SMTP (block 'smtp' hoặc 'smtp_env'): {e}")
-    return token_entries, smtp
+        ],
+        "smtp": {
+            "host": SMTP_HOST,
+            "port": SMTP_PORT,
+            "user": SMTP_USER,
+            "pass": SMTP_PASS
+        }
+    }
+
+def load_config() -> Dict[str, Any]:
+    """Load config from environment variables first, then fallback to JSON"""
+    try:
+        print("Loading configuration from environment variables...")
+        return load_config_from_env()
+    except ValueError as e:
+        print(f"Environment config error: {e}")
+        # Fallback to JSON config
+        if os.path.exists(CONFIG_PATH):
+            print(f"Falling back to JSON config: {CONFIG_PATH}")
+            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        else:
+            raise ValueError("No configuration found in environment variables or JSON file")
 
 def main():
-    token_entries, smtp_cfg = load_config()
+    try:
+        config = load_config()
+        token_entries = config["notion_tokens"]
+        smtp_cfg = config["smtp"]
+    except Exception as e:
+        print(f"Error loading config: {e}")
+        return
+    
     sent = 0
     for idx, t in enumerate(token_entries, 1):
         token = t["token"]

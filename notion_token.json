@@ -1,0 +1,19 @@
+{
+  "notion_tokens": [
+    {
+      "token": "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",
+      "databases": [
+        {
+          "id": "25a5be1a5701810bac83e27f14902dc3",
+          "recipients": ["khuattiendung250@gmail.com"]
+        }
+      ]
+    }
+  ],
+  "smtp": {
+    "host": "smtp.gmail.com",
+    "port": 587,
+    "user": "khuattiendung250@gmail.com",
+    "pass": "otkz ngqa dvld zenf"
+  }
+}
