@@ -33,8 +33,7 @@ jobs:
               "token": "${{ secrets.NOTION_TOKEN }}",
               "databases": [
                 {
-                  "id": "${{ secrets.NOTION_DATABASE_ID }}",
-                  "recipients": ["${{ secrets.EMAIL_RECIPIENTS }}"]
+                  "id": "${{ secrets.NOTION_DATABASE_ID }}"
                 }
               ]
             }
