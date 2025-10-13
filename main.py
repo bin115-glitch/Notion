@@ -23,7 +23,36 @@ load_dotenv()
 # Environment variables với fallback
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
-EMAIL_RECIPIENTS = os.getenv("EMAIL_RECIPIENTS", "").split(",")
+# Load email recipients from JSON file
+def load_email_recipients():
+    """Load email recipients from JSON file with fallback to environment variable"""
+    recipients_file = os.getenv("EMAIL_RECIPIENTS_FILE", "email_recipients.json")
+    
+    try:
+        # Try to load from JSON file first
+        if os.path.exists(recipients_file):
+            with open(recipients_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return data.get("recipients", [])
+    except (json.JSONDecodeError, FileNotFoundError, KeyError) as e:
+        print(f"Warning: Could not load recipients from {recipients_file}: {e}")
+    
+    # Fallback to environment variable
+    _email_recipients_raw = os.getenv("EMAIL_RECIPIENTS", "")
+    if _email_recipients_raw:
+        try:
+            # Try to parse as JSON array first
+            recipients = json.loads(_email_recipients_raw)
+            if isinstance(recipients, list):
+                return recipients
+        except (json.JSONDecodeError, ValueError):
+            pass
+        # Fallback to comma-separated string
+        return [email.strip() for email in _email_recipients_raw.split(",") if email.strip()]
+    
+    return []
+
+EMAIL_RECIPIENTS = load_email_recipients()
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER")
@@ -369,7 +398,7 @@ def load_config_from_env() -> Dict[str, Any]:
                 "databases": [
                     {
                         "id": NOTION_DATABASE_ID,
-                        "recipients": [email.strip() for email in EMAIL_RECIPIENTS if email.strip()]
+                        "recipients": EMAIL_RECIPIENTS
                     }
                 ]
             }

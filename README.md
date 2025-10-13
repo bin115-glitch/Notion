@@ -28,6 +28,9 @@ Script tự động gửi email thông báo công việc quá hạn từ Notion 
    ```bash
    cp notion_token.json.example notion_token.json
    # Chỉnh sửa notion_token.json với thông tin thật
+   
+   # Cấu hình danh sách người nhận email
+   # Chỉnh sửa email_recipients.json để thêm/sửa/xóa người nhận
    ```
 
 ## Cấu hình
@@ -43,8 +46,7 @@ Tạo file `notion_token.json`:
       "token": "ntn_your_notion_token_here",
       "databases": [
         {
-          "id": "your_database_id_here",
-          "recipients": ["email1@example.com", "email2@example.com"]
+          "id": "your_database_id_here"
         }
       ]
     }
@@ -58,13 +60,29 @@ Tạo file `notion_token.json`:
 }
 ```
 
+Tạo file `email_recipients.json` để quản lý danh sách người nhận:
+
+```json
+{
+  "recipients": [
+    "user1@example.com",
+    "user2@example.com",
+    "user3@example.com"
+  ],
+  "description": "Danh sách người nhận email cho Notion overdue notifications",
+  "last_updated": "2024-01-01"
+}
+```
+
+**Lưu ý:** Bạn có thể thêm/sửa/xóa người nhận bằng cách chỉnh sửa file `email_recipients.json` này.
+
 ### GitHub Actions
 
 Thêm các secrets sau vào GitHub repository:
 
 - `NOTION_TOKEN`: Token Notion của bạn
 - `NOTION_DATABASE_ID`: ID database Notion
-- `EMAIL_RECIPIENTS`: Danh sách email (cách nhau bởi dấu phẩy)
+- `EMAIL_RECIPIENTS`: Danh sách email (JSON array hoặc cách nhau bởi dấu phẩy) - hoặc sử dụng file `email_recipients.json`
 - `SMTP_HOST`: smtp.gmail.com
 - `SMTP_PORT`: 587
 - `SMTP_USER`: Email gửi
