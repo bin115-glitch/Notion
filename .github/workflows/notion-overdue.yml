@@ -2,64 +2,78 @@ name: Notion Overdue Mailer
 
 on:
   schedule:
-    # Chạy hàng ngày lúc 7:00 AM UTC (4:00 PM VN)
+    # Chạy hàng ngày lúc 00:00 UTC (07:00 VN)
     - cron: '0 0 * * *'
-  workflow_dispatch: # Cho phép chạy thủ công
+  workflow_dispatch:
 
 jobs:
   send-overdue-emails:
     runs-on: ubuntu-latest
-    
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-        
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        
-    - name: Create config file
-      run: |
-        # Extract recipients from email_recipients.json
-        RECIPIENTS=$(python -c "
-        import json
-        with open('email_recipients.json', 'r') as f:
-            data = json.load(f)
-        recipients = data.get('recipients', [])
-        print(','.join([f'\"{r}\"' for r in recipients]))
-        ")
-        
-        cat > notion_token.json << EOF
-        {
-          "notion_tokens": [
-            {
-              "token": "${{ secrets.NOTION_TOKEN }}",
-              "databases": [
-                {
-                  "id": "${{ secrets.NOTION_DATABASE_ID }}",
-                  "recipients": [$RECIPIENTS]
-                }
-              ]
-            }
-          ],
-          "smtp": {
-            "host": "${{ secrets.SMTP_HOST }}",
-            "port": ${{ secrets.SMTP_PORT }},
-            "user": "${{ secrets.SMTP_USER }}",
-            "pass": "${{ secrets.SMTP_PASS }}"
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # 👉 Tạo config bằng PYTHON (AN TOÀN)
+      - name: Create config file
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+        run: |
+          python << 'EOF'
+          import json, os
+
+          with open("email_recipients.json") as f:
+              recipients = json.load(f)["recipients"]
+
+          config = {
+              "notion_tokens": [
+                  {
+                      "token": os.environ["NOTION_TOKEN"],
+                      "databases": [
+                          {
+                              "id": os.environ["NOTION_DATABASE_ID"],
+                              "recipients": recipients
+                          }
+                      ]
+                  }
+              ],
+              "smtp": {
+                  "host": os.environ["SMTP_HOST"],
+                  "port": int(os.environ["SMTP_PORT"]),
+                  "user": os.environ["SMTP_USER"],
+                  "pass": os.environ["SMTP_PASS"]
+              }
           }
-        }
-        EOF
-        
-    - name: Run Notion Overdue Mailer
-      run: python main.py
-      
-    - name: Clean up config
-      if: always()
-      run: rm -f notion_token.json
+
+          with open("notion_token.json", "w") as f:
+              json.dump(config, f, indent=2)
+
+          print("notion_token.json generated successfully")
+          EOF
+
+      # 👉 Validate JSON cho chắc
+      - name: Validate config file
+        run: python -m json.tool notion_token.json
+
+      - name: Run Notion Overdue Mailer
+        run: python main.py
+
+      # 👉 Dọn dẹp (luôn chạy kể cả fail)
+      - name: Clean up config
+        if: always()
+        run: rm -f notion_token.json
