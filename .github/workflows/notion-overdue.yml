@@ -1,10 +1,10 @@
 name: Notion Overdue Mailer
 
-on:
-  schedule:
-    # Chạy hàng ngày lúc 00:00 UTC (07:00 VN)
-    - cron: '0 0 * * *'
-  workflow_dispatch:
+# on:
+#   schedule:
+#     # Chạy hàng ngày lúc 00:00 UTC (07:00 VN)
+#     - cron: '0 0 * * *'
+#   workflow_dispatch:
 
 jobs:
   send-overdue-emails:
